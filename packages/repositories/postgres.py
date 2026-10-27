@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -237,12 +238,13 @@ class PostgresRecruitmentRepository:
         evaluation: str | None = None, score_band: str | None = None,
         first_seen_on: date | None = None, sort: str = "score",
         limit: int = 50, offset: int = 0, include_summary: bool = True,
+        hidden_companies: Sequence[str] | None = None,
     ) -> JobBrowsePage:
         from .job_browse import browse_jobs
         return browse_jobs(self, query=query, company=company, category=category,
             platform=platform, evaluation=evaluation, score_band=score_band,
             first_seen_on=first_seen_on, sort=sort, limit=limit, offset=offset,
-            include_summary=include_summary)
+            include_summary=include_summary, hidden_companies=hidden_companies)
 
     def get_job(self, job_id: str) -> JobDetail | None:
         with self.storage.session() as session:

@@ -72,6 +72,9 @@
     jobFacets: { companies: [], categories: {}, platforms: [] },
     companySummaries: [],
     jobBrowse: { mode: "all", page: 1, pageSize: 50, total: 0, allTotal: 0, todayTotal: 0, requestId: 0 },
+    hiddenCompanies: new Set(),
+    hiddenCompanySignature: "",
+    hiddenCompanySaveTimer: 0,
     companyPage: 1,
     companyPageSize: 30,
     applications: [],
@@ -1423,6 +1426,7 @@
     );
     state.companySummaries = state.jobFacets.companies;
     renderCompanyRanking();
+    renderHiddenCompanyList();
   }
 
   async function loadCompanyRanking() {
@@ -1442,6 +1446,88 @@
     }
   }
 
+  const HIDDEN_COMPANY_LIMIT = 500;
+  const HIDDEN_COMPANY_URL = "/api/job-listing/hidden-companies";
+
+  function hiddenCompanyKeys() {
+    return [...state.hiddenCompanies].sort();
+  }
+
+  function renderHiddenCompanySummary() {
+    const count = state.hiddenCompanies.size;
+    setText("job-hide-summary-label", count ? `不看公司 ${count}` : "不看公司");
+    setText("job-hide-status", count ? `已隐藏 ${count} 家公司` : "未隐藏公司");
+    $("job-hide-panel")?.classList.toggle("is-filtering", count > 0);
+  }
+
+  function renderHiddenCompanyList({ force = false } = {}) {
+    const list = $("job-hide-list");
+    if (!list) return;
+    const term = ($("job-hide-search")?.value || "").trim().toLocaleLowerCase();
+    const facets = state.jobFacets.companies || [];
+    // Rebuilding on every page reload would reset the panel's scroll position,
+    // so the list is only rebuilt when its inputs actually changed.
+    const signature = `${term}|${facets.map((company) => `${company.key}:${company.job_count}:${company.name}`).join("|")}`;
+    if (!force && signature === state.hiddenCompanySignature) {
+      renderHiddenCompanySummary();
+      return;
+    }
+    state.hiddenCompanySignature = signature;
+    const companies = [...facets]
+      .filter((company) => !term || `${company.name} ${company.key}`.toLocaleLowerCase().includes(term))
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    clear(list);
+    companies.forEach((company) => {
+      const option = document.createElement("label");
+      option.className = "job-hide-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = company.key;
+      checkbox.dataset.hiddenCompany = company.key;
+      checkbox.checked = state.hiddenCompanies.has(company.key);
+      const name = element("span", "job-hide-option-name", company.name);
+      name.title = `${company.name} · ${company.job_count} 个岗位`;
+      option.append(checkbox, name, element("span", "job-hide-option-count", String(company.job_count ?? 0)));
+      list.appendChild(option);
+    });
+    const empty = $("job-hide-empty");
+    if (empty) empty.hidden = companies.length > 0;
+    renderHiddenCompanySummary();
+  }
+
+  async function loadHiddenCompanies() {
+    try {
+      const payload = await api(HIDDEN_COMPANY_URL);
+      const keys = Array.isArray(payload?.hidden_companies) ? payload.hidden_companies : [];
+      state.hiddenCompanies = new Set(
+        keys.filter((key) => typeof key === "string" && key.trim()).slice(0, HIDDEN_COMPANY_LIMIT),
+      );
+    } catch (_) {
+      // A read-only runtime still filters locally; only the saved choice is unavailable.
+      state.hiddenCompanies = new Set();
+    }
+    renderHiddenCompanySummary();
+    renderHiddenCompanyList({ force: true });
+  }
+
+  function persistHiddenCompanies({ immediate = false } = {}) {
+    clearTimeout(state.hiddenCompanySaveTimer);
+    const save = async () => {
+      try {
+        await api(HIDDEN_COMPANY_URL, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden_companies: hiddenCompanyKeys() }),
+        });
+        renderHiddenCompanySummary();
+      } catch (error) {
+        setText("job-hide-status", `本次有效，未能保存：${error.message}`);
+      }
+    };
+    if (immediate) void save();
+    else state.hiddenCompanySaveTimer = setTimeout(() => void save(), 400);
+  }
+
   function jobBrowseQuery() {
     const params = new URLSearchParams({
       limit: String(state.jobBrowse.pageSize),
@@ -1459,6 +1545,7 @@
     fields.forEach(([key, value]) => { if (value) params.set(key, value); });
     const evaluation = $("job-evaluation-filter")?.value;
     if (["scored", "unscored", "pending", "jd_incomplete"].includes(evaluation)) params.set("evaluation", evaluation);
+    hiddenCompanyKeys().forEach((key) => params.append("exclude_company", key));
     return params;
   }
 
@@ -6079,6 +6166,8 @@
     });
     // Each section renders as soon as its own data is ready. Mail/model startup
     // or a slow operational report must not block the current job page.
+    // The exclusion list is read first so the very first job request honors it.
+    await loadHiddenCompanies();
     await Promise.allSettled([
       api("/health").then(health => {
         setStatus("ready", "已连接");
@@ -6498,8 +6587,31 @@
     $("job-filter-form").addEventListener("reset", () => {
       setTimeout(() => {
         state.jobBrowse.page = 1;
+        if (state.hiddenCompanies.size) {
+          state.hiddenCompanies.clear();
+          renderHiddenCompanyList({ force: true });
+          persistHiddenCompanies();
+        }
         void loadJobBrowser();
       }, 0);
+    });
+    $("job-hide-search").addEventListener("input", () => renderHiddenCompanyList());
+    $("job-hide-list").addEventListener("change", (event) => {
+      const key = event.target?.dataset?.hiddenCompany;
+      if (!key) return;
+      if (event.target.checked) state.hiddenCompanies.add(key);
+      else state.hiddenCompanies.delete(key);
+      renderHiddenCompanySummary();
+      persistHiddenCompanies();
+      // The filter form's own change listener reloads the page after this runs.
+    });
+    $("job-hide-clear").addEventListener("click", () => {
+      if (!state.hiddenCompanies.size) return;
+      state.hiddenCompanies.clear();
+      renderHiddenCompanyList({ force: true });
+      persistHiddenCompanies({ immediate: true });
+      state.jobBrowse.page = 1;
+      void loadJobBrowser();
     });
     document.querySelectorAll("[data-job-mode]").forEach((button) => button.addEventListener("click", () => {
       state.jobBrowse.mode = button.dataset.jobMode || "all";

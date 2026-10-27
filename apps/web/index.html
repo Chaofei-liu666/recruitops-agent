@@ -291,6 +291,18 @@
                 <label><span class="sr-only">评分状态</span><select id="job-evaluation-filter"><option value="">全部评分状态</option><option value="scored">已评分</option><option value="pending">待评分</option><option value="jd_incomplete">待补全 JD</option><option value="unscored">所有未评分</option></select></label>
                 <label><span class="sr-only">匹配分数</span><select id="job-score-filter"><option value="">不限分数</option><option value="high">70 分及以上</option><option value="medium">60 至 69 分</option><option value="low">60 分以下</option></select></label>
                 <label><span class="sr-only">排序方式</span><select id="job-sort"><option value="score">匹配度优先</option><option value="newest">最新发现</option><option value="company">按公司</option></select></label>
+                <details class="job-hide-filter" id="job-hide-panel">
+                  <summary class="job-hide-summary"><span class="job-hide-summary-label" id="job-hide-summary-label">不看公司</span><span class="job-hide-caret" aria-hidden="true">▾</span></summary>
+                  <div class="job-hide-popover">
+                    <label class="job-hide-search" for="job-hide-search"><span class="sr-only">搜索要隐藏的公司</span><input id="job-hide-search" type="search" placeholder="搜索公司名称" autocomplete="off"></label>
+                    <div class="job-hide-list" id="job-hide-list" role="group" aria-label="选择不在岗位列表中显示的公司"></div>
+                    <p class="job-hide-empty" id="job-hide-empty" hidden>没有匹配的公司</p>
+                    <div class="job-hide-footer">
+                      <span class="muted-label" id="job-hide-status">未隐藏公司</span>
+                      <button class="text-button" id="job-hide-clear" type="button">恢复全部</button>
+                    </div>
+                  </div>
+                </details>
                 <button class="button button--ghost" id="job-filter-reset" type="reset">重置</button>
               </form>
               <div class="table-scroll" id="jobs-table-wrap" data-state="loading">

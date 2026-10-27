@@ -52,6 +52,11 @@ from packages.recruitment_mail import (
     RecruitmentMailStore,
     RecruitmentMessageCategory,
 )
+from packages.job_listing_preferences import (
+    JobListingPreferenceError,
+    read_hidden_companies as read_saved_hidden_companies,
+    write_hidden_companies as write_saved_hidden_companies,
+)
 from packages.repositories.base import RecruitmentRepository
 from packages.repositories.postgres import PostgresRecruitmentRepository
 from packages.reporting import build_reporting_summary
@@ -1117,6 +1122,7 @@ def browse_jobs(
     score_band: Literal["high", "medium", "low"] | None = None,
     first_seen_on: date | None = None,
     sort: Literal["score", "newest", "company"] = "score",
+    exclude_company: list[str] | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     include_summary: bool = True,
@@ -1140,9 +1146,36 @@ def browse_jobs(
             limit=limit,
             offset=offset,
             **({"include_summary": False} if not include_summary else {}),
+            **({"hidden_companies": exclude_company} if exclude_company else {}),
         )
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+class HiddenCompaniesEdit(BaseModel):
+    """Companies the user chose not to see in the job list."""
+
+    model_config = ConfigDict(extra="forbid")
+    hidden_companies: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.get("/api/job-listing/hidden-companies", tags=["jobs"])
+def read_hidden_companies() -> dict[str, Any]:
+    settings = get_settings()
+    if getattr(settings, "agent_root", None) is None:
+        return {"hidden_companies": []}
+    return {"hidden_companies": read_saved_hidden_companies(settings)}
+
+
+@app.put("/api/job-listing/hidden-companies", tags=["jobs"])
+def save_hidden_companies(body: HiddenCompaniesEdit) -> dict[str, Any]:
+    settings = get_settings()
+    if not getattr(settings, "write_enabled", False):
+        raise HTTPException(status_code=503, detail="RECRUITOPS_WRITE_ENABLED must be true")
+    try:
+        return {"hidden_companies": write_saved_hidden_companies(settings, body.hidden_companies)}
+    except JobListingPreferenceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobDetail, tags=["jobs"])

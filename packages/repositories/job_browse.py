@@ -354,7 +354,7 @@ def _title_membership(titles, dialect):
 
 def browse_jobs(repository, *, query=None, company=None, category=None, platform=None,
                 evaluation=None, score_band=None, first_seen_on=None, sort="score",
-                limit=50, offset=0, include_summary=True):
+                limit=50, offset=0, include_summary=True, hidden_companies=None):
     if limit < 1 or offset < 0:
         raise ValueError("limit must be positive and offset cannot be negative")
     cache = _cache_for(repository.storage.engine)
@@ -373,17 +373,31 @@ def browse_jobs(repository, *, query=None, company=None, category=None, platform
             haystack = (_fold(company_name, cache) + " " + _fold(JobSnapshot.title, cache)
                         + " " + _fold(func.coalesce(JobSnapshot.city, ""), cache))
             predicates.append(haystack.contains(normalized_query, autoescape=True))
+        canonical_orgs = {name: row["organization_id"] for name, row in cache.catalog.items() if row["organization_id"]}
+        organization = func.coalesce(
+            func.nullif(CompanySnapshot.organization_id, ""),
+            case(canonical_orgs, value=_fold(func.trim(company_name), cache)) if canonical_orgs else None,
+            JobSnapshot.organization_id,
+        )
         normalized_company = (company or "").strip().casefold()
         if normalized_company:
-            canonical_orgs = {name: row["organization_id"] for name, row in cache.catalog.items() if row["organization_id"]}
-            organization = func.coalesce(
-                func.nullif(CompanySnapshot.organization_id, ""),
-                case(canonical_orgs, value=_fold(func.trim(company_name), cache)) if canonical_orgs else None,
-                JobSnapshot.organization_id,
-            )
             predicates.append(or_(_fold(JobSnapshot.company_id, cache) == normalized_company,
                                   _fold(company_name, cache) == normalized_company,
                                   _fold(organization, cache) == normalized_company))
+        # A hidden company is matched on the same identities the company filter
+        # accepts, so a facet key (organization or company id) works either way.
+        hidden_keys = tuple(sorted({
+            value.strip().casefold() for value in (hidden_companies or ()) if value and value.strip()
+        }))
+        hidden_predicates = []
+        if hidden_keys:
+            hidden_identity = or_(
+                _fold(JobSnapshot.company_id, cache).in_(hidden_keys),
+                _fold(company_name, cache).in_(hidden_keys),
+                func.coalesce(_fold(organization, cache), "").in_(hidden_keys),
+            )
+            hidden_predicates.append(~hidden_identity)
+        predicates.extend(hidden_predicates)
         if category:
             predicates.append(_title_membership(
                 (title for title, key in cache.titles.items() if key == category), dialect,
@@ -428,7 +442,7 @@ def browse_jobs(repository, *, query=None, company=None, category=None, platform
             stats, facets = cached_stats.model_copy(deep=True), cached_facets.model_copy(deep=True)
             if featured_ids:
                 indexed = {row["id"]: row for row in session.execute(
-                    base.where(JobSnapshot.id.in_(featured_ids))).mappings()}
+                    base.where(JobSnapshot.id.in_(featured_ids), *hidden_predicates)).mappings()}
                 featured_rows = [indexed[key] for key in featured_ids if key in indexed]
         stages = _application_stages(session, {row["id"] for row in [*rows, *featured_rows]})
         return JobBrowsePage(
